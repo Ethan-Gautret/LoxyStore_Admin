@@ -1,0 +1,23 @@
+# LoxyStore — le vhost backend.loxystore.fr a pour document root la racine du
+# projet, et non public/. On renvoie donc toutes les requêtes dans public/ pour
+# que le front controller de Laravel (public/index.php) les traite.
+#
+# Effet de bord voulu (sécurité) : les fichiers de la racine (.env, composer.json,
+# artisan, etc.) ne sont plus servis en clair — ils sont désormais routés vers
+# Laravel, qui répond 404.
+#
+# En local (php artisan serve sert déjà public/ directement) ce fichier est
+# ignoré : aucun impact. Le correctif "propre" reste de faire pointer le
+# document root du vhost sur .../backend/public — ce .htaccess est le
+# contournement quand on n'a pas la main sur la config du vhost.
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Racine "/" -> front controller Laravel
+    RewriteRule ^$ public/index.php [L]
+
+    # Tout le reste -> dans public/. Le (?!public/) empêche une boucle de
+    # réécriture (public/foo ne serait sinon re-préfixé en public/public/foo).
+    RewriteRule ^(?!public/)(.*)$ public/$1 [L]
+</IfModule>
