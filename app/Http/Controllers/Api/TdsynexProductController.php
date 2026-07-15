@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\CategoryMapping;
+use App\Models\MarginRule;
 use App\Models\TDSynexProduct;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -26,8 +27,9 @@ class TdsynexProductController extends Controller
             $mappedSet           = array_flip($mappedCategoryCodes);
             $filterMode          = $request->string('filter')->toString() ?: 'all';
 
-            // Marge par catégorie (pour calculer le prix vendu HT à l'affichage,
-            // même formule que le push PrestaShop : cost * (1 + marge%)).
+            // Marge par catégorie + marge globale (Règles des marges) pour calculer
+            // le prix vendu HT à l'affichage, même logique que le push PrestaShop :
+            // marge catégorie si définie, sinon marge globale ; prix = cost * (1 + marge%).
             $marginByCategory = [];
             try {
                 $marginByCategory = CategoryMapping::query()
@@ -35,6 +37,7 @@ class TdsynexProductController extends Controller
                     ->map(fn ($m) => is_numeric($m) ? (float) $m : null)
                     ->all();
             } catch (\Throwable) {}
+            $globalMargin = MarginRule::globalMargin();
 
             $query = TDSynexProduct::query();
 
@@ -77,7 +80,7 @@ class TdsynexProductController extends Controller
                 ->orderByDesc('updated_at')
                 ->forPage($page, $pageSize)
                 ->get()
-                ->map(fn (TDSynexProduct $product) => $this->formatLocalProduct($product, $mappedSet, $marginByCategory))
+                ->map(fn (TDSynexProduct $product) => $this->formatLocalProduct($product, $mappedSet, $marginByCategory, $globalMargin))
                 ->values()
                 ->all();
 
@@ -171,18 +174,18 @@ class TdsynexProductController extends Controller
 
     // Integration with TD SYNNEX removed: payload/catalogue helpers deleted.
 
-    private function formatLocalProduct(TDSynexProduct $product, array $mappedSet = [], array $marginByCategory = []): array
+    private function formatLocalProduct(TDSynexProduct $product, array $mappedSet = [], array $marginByCategory = [], float $globalMargin = MarginRule::DEFAULT_GLOBAL_MARGIN): array
     {
         $stockQty     = $product->stock_qty;
         $hasStockInfo = $stockQty !== null;
         $isOutOfStock = $hasStockInfo && ((int) $stockQty <= 0);
         $categoryCode = trim((string) ($product->category_tds ?? ''));
 
-        // Prix vendu HT = prix d'achat × (1 + marge%). La marge vient du mapping de
-        // la catégorie ; défaut 15% (identique au push PrestaShop) si non défini.
+        // Prix vendu HT = prix d'achat × (1 + marge%), sans TVA. Marge = celle du
+        // mapping de la catégorie si définie, sinon la marge globale (Règles des marges).
         $cost         = $product->cost_price !== null ? (float) $product->cost_price : null;
-        $margin       = $marginByCategory[$categoryCode] ?? null;
-        $margin       = is_numeric($margin) ? (float) $margin : 15.0;
+        $catMargin    = $marginByCategory[$categoryCode] ?? null;
+        $margin       = is_numeric($catMargin) ? (float) $catMargin : $globalMargin;
         $sellingPrice = ($cost !== null && $cost > 0) ? round($cost * (1 + $margin / 100), 2) : null;
 
         return [

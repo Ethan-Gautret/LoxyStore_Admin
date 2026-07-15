@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\CategorySyncController;
 use App\Http\Controllers\Api\CronController;
 use App\Http\Controllers\Api\IntegrationSettingsController;
+use App\Http\Controllers\Api\MarginRuleController;
 use App\Http\Controllers\Api\SyncLogController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -43,6 +44,12 @@ Route::prefix('categories')->group(function () {
     Route::get('/{code}/import-status', [CategoryController::class, 'tdsImportStatus']);
     // Push all local products of a mapped category to PrestaShop.
     Route::post('/{code}/push', [CategorySyncController::class, 'push']);
+});
+
+// Règles des marges (MVP : règle globale)
+Route::prefix('margin-rules')->group(function () {
+    Route::get('/global', [MarginRuleController::class, 'showGlobal']);
+    Route::put('/global', [MarginRuleController::class, 'updateGlobal']);
 });
 
 // Synchronisation history (manual + scheduled runs)

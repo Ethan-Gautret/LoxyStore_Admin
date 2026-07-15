@@ -156,8 +156,10 @@ export default function Categories() {
 
   // Right panel form state
   const [formPsCategoryId, setFormPsCategoryId] = useState('')
-  const [formMargin, setFormMargin] = useState('15')
+  const [formMargin, setFormMargin] = useState('')
   const [formMinStock, setFormMinStock] = useState('2')
+  // Marge globale (Règles des marges) : sert de repli quand la marge catégorie est vide.
+  const [globalMargin, setGlobalMargin] = useState(null)
 
   // Load TDS categories
   useEffect(() => {
@@ -215,11 +217,18 @@ export default function Categories() {
       .catch(() => { })
   }, [])
 
+  // Load the global default margin (shown as the placeholder when a category has no margin)
+  useEffect(() => {
+    requestJson('/api/margin-rules/global?refresh=1')
+      .then(data => setGlobalMargin(data?.global?.margin_value ?? null))
+      .catch(() => { })
+  }, [])
+
   // Sync form when selection changes
   useEffect(() => {
     const m = mappings[selectedId]
     setFormPsCategoryId(m?.ps_category_id ? String(m.ps_category_id) : '')
-    setFormMargin(m?.margin_override != null ? String(m.margin_override) : '15')
+    setFormMargin(m?.margin_override != null ? String(m.margin_override) : '')
     setFormMinStock(m?.min_stock_override != null ? String(m.min_stock_override) : '2')
     setSaveMessage('')
     setSyncResult(null)
@@ -446,7 +455,7 @@ export default function Categories() {
 
             <div className="dual-fields">
               <label className="field-group">
-                <span>Marge par défaut (%)</span>
+                <span>Marge (%) — vide = marge globale</span>
                 <input
                   type="number"
                   min="0"
@@ -454,6 +463,7 @@ export default function Categories() {
                   value={formMargin}
                   onChange={e => setFormMargin(e.target.value)}
                   disabled={selectedId == null}
+                  placeholder={globalMargin != null ? `Globale : ${globalMargin}%` : 'Marge globale'}
                 />
               </label>
               <label className="field-group">
@@ -497,7 +507,7 @@ export default function Categories() {
             <button className="cancel-button" type="button" onClick={() => {
               const m = mappings[selectedId]
               setFormPsCategoryId(m?.ps_category_id ? String(m.ps_category_id) : '')
-              setFormMargin(m?.margin_override != null ? String(m.margin_override) : '15')
+              setFormMargin(m?.margin_override != null ? String(m.margin_override) : '')
               setFormMinStock(m?.min_stock_override != null ? String(m.min_stock_override) : '2')
               setSaveMessage('')
             }}>

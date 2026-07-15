@@ -105,7 +105,10 @@ class CategorySyncController extends Controller
             ]);
         }
 
-        $margin = $mapping->margin_override !== null ? (float) $mapping->margin_override : 15.0;
+        // Marge = celle de la catégorie si définie, sinon la marge globale (Règles des marges).
+        $margin = $mapping->margin_override !== null
+            ? (float) $mapping->margin_override
+            : \App\Models\MarginRule::globalMargin();
 
         // Look up products already in PrestaShop (globally by SKU/reference) so we
         // update (PUT) instead of duplicating (POST) on a re-push.
