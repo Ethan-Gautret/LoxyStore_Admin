@@ -26,6 +26,16 @@ class TdsynexProductController extends Controller
             $mappedSet           = array_flip($mappedCategoryCodes);
             $filterMode          = $request->string('filter')->toString() ?: 'all';
 
+            // Marge par catégorie (pour calculer le prix vendu HT à l'affichage,
+            // même formule que le push PrestaShop : cost * (1 + marge%)).
+            $marginByCategory = [];
+            try {
+                $marginByCategory = CategoryMapping::query()
+                    ->pluck('margin_override', 'tds_category')
+                    ->map(fn ($m) => is_numeric($m) ? (float) $m : null)
+                    ->all();
+            } catch (\Throwable) {}
+
             $query = TDSynexProduct::query();
 
             // "mapped" filter: restrict to categories that have an active PS mapping
@@ -67,7 +77,7 @@ class TdsynexProductController extends Controller
                 ->orderByDesc('updated_at')
                 ->forPage($page, $pageSize)
                 ->get()
-                ->map(fn (TDSynexProduct $product) => $this->formatLocalProduct($product, $mappedSet))
+                ->map(fn (TDSynexProduct $product) => $this->formatLocalProduct($product, $mappedSet, $marginByCategory))
                 ->values()
                 ->all();
 
@@ -161,12 +171,19 @@ class TdsynexProductController extends Controller
 
     // Integration with TD SYNNEX removed: payload/catalogue helpers deleted.
 
-    private function formatLocalProduct(TDSynexProduct $product, array $mappedSet = []): array
+    private function formatLocalProduct(TDSynexProduct $product, array $mappedSet = [], array $marginByCategory = []): array
     {
         $stockQty     = $product->stock_qty;
         $hasStockInfo = $stockQty !== null;
         $isOutOfStock = $hasStockInfo && ((int) $stockQty <= 0);
         $categoryCode = trim((string) ($product->category_tds ?? ''));
+
+        // Prix vendu HT = prix d'achat × (1 + marge%). La marge vient du mapping de
+        // la catégorie ; défaut 15% (identique au push PrestaShop) si non défini.
+        $cost         = $product->cost_price !== null ? (float) $product->cost_price : null;
+        $margin       = $marginByCategory[$categoryCode] ?? null;
+        $margin       = is_numeric($margin) ? (float) $margin : 15.0;
+        $sellingPrice = ($cost !== null && $cost > 0) ? round($cost * (1 + $margin / 100), 2) : null;
 
         return [
             'id'           => $product->id,
@@ -177,6 +194,8 @@ class TdsynexProductController extends Controller
             'category_mapped' => $categoryCode !== '' && isset($mappedSet[$categoryCode]),
             'ean'          => $product->ean,
             'cost_price'   => $product->cost_price,
+            'selling_price' => $sellingPrice,
+            'margin'        => $margin,
             'stock_qty'    => $hasStockInfo ? (int) $stockQty : null,
             'weight'       => $product->weight,
             'description'  => $product->description,

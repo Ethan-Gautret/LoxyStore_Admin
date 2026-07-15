@@ -27,6 +27,7 @@ function normalizeProduct(product) {
     stock_qty: typeof product.stock_qty === 'number' ? product.stock_qty : null,
     stock_tone: product.stock_tone || 'muted',
     cost_price: product.cost_price != null ? parseFloat(product.cost_price) : null,
+    selling_price: product.selling_price != null ? parseFloat(product.selling_price) : null,
     weight: product.weight != null ? parseFloat(product.weight) : null,
     is_active: Boolean(product.is_active),
     status: product.status || 'Actif',

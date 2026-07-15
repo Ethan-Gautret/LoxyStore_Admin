@@ -646,10 +646,14 @@ class CategoryController extends Controller
 
                 $description = $remoteProduct['description'] ?? data_get($remoteProduct, 'productDescription');
                 $rawPayload = $remoteProduct['raw_payload'] ?? $remoteProduct;
-                $stockQty = data_get($remoteProduct, 'stock.quantityAvailableLocal');
+                // "Bon stock" = quantité disponible TOTALE chez TD SYNNEX (tous
+                // entrepôts confondus), et non le seul entrepôt local
+                // (quantityAvailableLocal, souvent à 0 alors qu'il y a du stock ailleurs).
+                $stockQty = data_get($remoteProduct, 'stock.quantityAvailableTotal');
 
                 if ($stockQty === null) {
-                    $stockQty = $remoteProduct['stock_qty'] ?? data_get($remoteProduct, 'stock.quantityAvailableTotal');
+                    $stockQty = data_get($remoteProduct, 'stock.quantityAvailableLocal')
+                        ?? ($remoteProduct['stock_qty'] ?? null);
                 }
 
                 $costPrice = $remoteProduct['cost_price']
