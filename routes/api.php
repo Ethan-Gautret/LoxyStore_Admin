@@ -39,6 +39,8 @@ Route::prefix('categories')->group(function () {
     Route::get('/tds', [CategoryController::class, 'tdsCategories']);
     Route::get('/tds/counts', [CategoryController::class, 'tdsCategoryCounts']);
     Route::post('/mapping', [CategoryController::class, 'saveMapping']);
+    // Import progress for a mapped category (drives the "Import en cours" indicator).
+    Route::get('/{code}/import-status', [CategoryController::class, 'tdsImportStatus']);
     // Push all local products of a mapped category to PrestaShop.
     Route::post('/{code}/push', [CategorySyncController::class, 'push']);
 });

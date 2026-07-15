@@ -151,6 +151,8 @@ export default function Categories() {
   const [saveMessage, setSaveMessage] = useState('')
   const [syncing, setSyncing] = useState(false)
   const [syncResult, setSyncResult] = useState(null)
+  // Import progress of the selected mapped category (polled from the backend)
+  const [importStatus, setImportStatus] = useState(null)
 
   // Right panel form state
   const [formPsCategoryId, setFormPsCategoryId] = useState('')
@@ -222,6 +224,27 @@ export default function Categories() {
     setSaveMessage('')
     setSyncResult(null)
   }, [selectedId])
+
+  // Poll the import progress for the selected category while it is mapped and the
+  // import is still running. As soon as the background import finishes, polling
+  // stops and the push button is enabled.
+  useEffect(() => {
+    const isMapped = (statuses[selectedId] || 'unmapped') === 'mapped'
+    setImportStatus(null)
+    if (!selectedId || !isMapped) return
+    let active = true
+    let timer = null
+    const poll = async () => {
+      try {
+        const data = await requestJson(`/api/categories/${selectedId}/import-status`)
+        if (!active) return
+        setImportStatus(data)
+        if (data.running) timer = setTimeout(poll, 3000)
+      } catch { /* erreurs transitoires ignorées */ }
+    }
+    poll()
+    return () => { active = false; if (timer) clearTimeout(timer) }
+  }, [selectedId, statuses[selectedId]])
 
   const counts = useMemo(() => {
     const all = tdsCategories.length
@@ -489,13 +512,28 @@ export default function Categories() {
                 ? 'Cette catégorie est mappée. Vous pouvez envoyer ses produits vers PrestaShop.'
                 : 'Mappez cette catégorie à une catégorie PrestaShop pour activer la synchronisation.'}
             </p>
+
+            {selectedStatus === 'mapped' && importStatus && (
+              <p className={`import-progress ${importStatus.running ? 'running' : importStatus.stalled ? 'warning' : 'done'}`}>
+                {importStatus.running
+                  ? `⏳ Import des produits en cours… ${importStatus.imported}${importStatus.total ? ` / ${importStatus.total}` : ''} — patientez avant de pousser.`
+                  : importStatus.stalled
+                    ? `⚠ Import interrompu — ${importStatus.imported} produit(s) importé(s). Vous pouvez pousser, mais il en manque peut-être (re-mappez pour relancer l'import).`
+                    : `✓ ${importStatus.imported} produit(s) importé(s), prêts à être poussés.`}
+              </p>
+            )}
+
             <button
               className="push-button"
               type="button"
               onClick={handlePush}
-              disabled={selectedStatus !== 'mapped' || syncing}
+              disabled={selectedStatus !== 'mapped' || syncing || importStatus?.running}
             >
-              {syncing ? 'Envoi en cours...' : 'Pousser vers PrestaShop'}
+              {syncing
+                ? 'Envoi en cours...'
+                : importStatus?.running
+                  ? 'Import en cours…'
+                  : 'Pousser vers PrestaShop'}
             </button>
 
             {syncResult && (

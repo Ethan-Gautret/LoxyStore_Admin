@@ -272,6 +272,13 @@ class CategoryController extends Controller
             throw new \RuntimeException('URL catalogue TDSynex invalide.');
         }
 
+        // Track import progress so the UI can show "Import en cours N/total" and
+        // only enable the PrestaShop push once every product has been imported.
+        $expectedTotal = $this->fetchTdsynexCategoryCount($catalogueUrl, $token, $categoryCode);
+        $this->writeImportStatus($categoryCode, 'running', $expectedTotal > 0 ? $expectedTotal : null);
+
+        try {
+
         $pageSize = 100;
         $maxPages = 100;   // A single query is capped by the API at 10000 results (= 100 pages).
         $batchSize = 5;    // TD SYNNEX returns HTTP 500/401 above ~5 concurrent requests.
@@ -316,6 +323,8 @@ class CategoryController extends Controller
                 ->delete();
         }
 
+        $this->writeImportStatus($categoryCode, 'done');
+
         return [
             'ok'            => true,
             'total'         => count($uniqueSkus),
@@ -323,6 +332,11 @@ class CategoryController extends Controller
             'updated'       => $updated,
             'manufacturers' => count($manufacturers),
         ];
+
+        } catch (\Throwable $e) {
+            $this->writeImportStatus($categoryCode, 'failed');
+            throw $e;
+        }
     }
 
 
@@ -691,6 +705,10 @@ class CategoryController extends Controller
                 }
             }
         });
+
+        // Keep the import "alive" for the status endpoint (heartbeat), so a long
+        // running import is not mistaken for a stalled one.
+        $this->touchImportStatus($categoryCode);
     }
 
 
@@ -1016,6 +1034,93 @@ class CategoryController extends Controller
         }
     }
 
+
+    /**
+     * Import progress for a category, consumed by the Categories page to show
+     * "Import en cours N/total" and to gate the PrestaShop push button (only
+     * enabled once the import is done). `imported` is the authoritative live DB
+     * count; `status`/`total`/heartbeat come from the cache record written by the
+     * import. A running import whose heartbeat is stale (process reaped) is
+     * reported as `stalled` so the UI never blocks the push forever.
+     */
+    public function tdsImportStatus(string $code): JsonResponse
+    {
+        $imported = 0;
+        try {
+            $imported = (int) TDSynexProduct::query()->where('category_tds', $code)->count();
+        } catch (\Throwable) {}
+
+        $record = null;
+        try {
+            $record = Cache::store(CacheStoreResolver::name())->get($this->importStatusKey($code));
+        } catch (\Throwable) {}
+
+        $status    = is_array($record) ? ($record['status'] ?? null) : null;
+        $total     = is_array($record) ? ($record['total'] ?? null) : null;
+        $heartbeat = is_array($record) ? ($record['heartbeat'] ?? null) : null;
+
+        // No status record (feature added after some imports, or cache evicted):
+        // infer from the DB so the button is usable.
+        if ($status === null) {
+            $status = $imported > 0 ? 'done' : 'idle';
+        }
+
+        $stalled = $status === 'running'
+            && $heartbeat !== null
+            && (now()->timestamp - (int) $heartbeat) > 90;
+
+        $running = $status === 'running' && ! $stalled;
+
+        return response()->json([
+            'success'  => true,
+            'status'   => $status,
+            'imported' => $imported,
+            'total'    => $total !== null ? (int) $total : null,
+            'running'  => $running,
+            'stalled'  => $stalled,
+            'done'     => $status === 'done',
+        ]);
+    }
+
+    private function importStatusKey(string $code): string
+    {
+        return 'integration:tdsynnex:importstatus:' . sha1($code);
+    }
+
+    private function writeImportStatus(string $code, string $status, ?int $total = null): void
+    {
+        try {
+            $store = Cache::store(CacheStoreResolver::name());
+            $key = $this->importStatusKey($code);
+
+            if ($total === null) {
+                $existing = $store->get($key);
+                $total = is_array($existing) ? ($existing['total'] ?? null) : null;
+            }
+
+            $store->put($key, [
+                'status'    => $status,        // running | done | failed
+                'total'     => $total,
+                'heartbeat' => now()->timestamp,
+            ], now()->addDay());
+        } catch (\Throwable) {}
+    }
+
+    private function touchImportStatus(string $code): void
+    {
+        try {
+            $store = Cache::store(CacheStoreResolver::name());
+            $key = $this->importStatusKey($code);
+            $existing = $store->get($key);
+
+            if (! is_array($existing) || ($existing['status'] ?? null) !== 'running') {
+                return;
+            }
+
+            $existing['heartbeat'] = now()->timestamp;
+            $store->put($key, $existing, now()->addDay());
+        } catch (\Throwable) {}
+    }
 
     private function flushApiResponseCache(): void
     {

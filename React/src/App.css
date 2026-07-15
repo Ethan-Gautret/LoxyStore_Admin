@@ -943,6 +943,30 @@ button.pill:hover {
   line-height: 1.5;
 }
 
+.import-progress {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  font-weight: 600;
+}
+
+.import-progress.running {
+  background: rgba(30, 127, 255, 0.09);
+  color: #1a6fe8;
+}
+
+.import-progress.warning {
+  background: rgba(240, 165, 0, 0.12);
+  color: #a86b00;
+}
+
+.import-progress.done {
+  background: rgba(29, 191, 115, 0.10);
+  color: #12925a;
+}
+
 .push-button {
   width: 100%;
   height: 48px;
