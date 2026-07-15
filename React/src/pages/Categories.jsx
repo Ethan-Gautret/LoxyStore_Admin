@@ -236,7 +236,8 @@ export default function Categories() {
     let timer = null
     const poll = async () => {
       try {
-        const data = await requestJson(`/api/categories/${selectedId}/import-status`)
+        // refresh=1 bypasses the 5-min API response cache so progress is live.
+        const data = await requestJson(`/api/categories/${selectedId}/import-status?refresh=1`)
         if (!active) return
         setImportStatus(data)
         if (data.running) timer = setTimeout(poll, 3000)
