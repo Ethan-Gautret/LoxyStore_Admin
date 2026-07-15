@@ -1,0 +1,141 @@
+name: Deploy (production)
+
+# Déploiement de LoxyStore via SSH + rsync.
+#   1. Install dépendances backend (Composer, prod)
+#   2. Install dépendances front (React/) + build Vite (base /synchro/)
+#   3. rsync backend        -> <DEPLOY_PATH>/backend
+#   4. rsync front (dist)   -> <DEPLOY_PATH>/public_html/synchro
+#   5. release distante     -> migrate + caches + queue:restart (remote-release.sh)
+#   6. smoke tests (API /api/health + front /synchro/)
+#
+# Secrets requis : DEPLOY_SSH_KEY, DEPLOY_HOST, DEPLOY_USER, DEPLOY_PATH, DEPLOY_KNOWN_HOSTS
+# Variable optionnelle : DEPLOY_PORT (défaut 22)
+
+on:
+  push:
+    branches: [main, Deploye_test]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Simulation (rsync --dry-run, aucune écriture, pas de migrate)"
+        type: boolean
+        default: true
+
+# Un seul déploiement à la fois (pas de course entre deux pushes).
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  BACKEND_URL: https://backend.loxystore.fr
+  FRONT_URL: https://loxystore.fr/synchro/
+  # URL de l'API injectée dans le build front (le code React ajoute /api/... lui-même)
+  VITE_API_URL: https://backend.loxystore.fr
+
+jobs:
+  deploy:
+    name: Build + Deploy (SSH/rsync)
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --- 1) Dépendances backend (Laravel / Composer, prod) -------------
+      - name: Setup PHP 8.3
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: mbstring, dom, fileinfo, mysqlnd, pdo, pdo_mysql, bcmath, intl, zip, gd, curl, xml, tokenizer
+          coverage: none
+          tools: composer:v2
+
+      - name: Install Composer (prod, sans dev)
+        run: composer install --no-dev --optimize-autoloader --no-interaction --prefer-dist --no-progress
+
+      # --- 2) Dépendances + build front (SPA React / Vite) ---------------
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: React/package-lock.json
+
+      - name: Install dépendances front
+        working-directory: React
+        run: npm ci
+
+      - name: Générer le .env.production du front
+        working-directory: React
+        run: echo "VITE_API_URL=${{ env.VITE_API_URL }}" > .env.production
+
+      - name: Build de production (Vite, base /synchro/)
+        working-directory: React
+        run: npm run build
+
+      # --- Préparation SSH ---------------------------------------------
+      - name: Configurer la clé SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Définir les variables de connexion
+        run: |
+          PORT="${{ vars.DEPLOY_PORT }}"
+          echo "SSH_OPTS=-i $HOME/.ssh/deploy_key -p ${PORT:-22} -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes" >> "$GITHUB_ENV"
+          echo "SSH_TARGET=${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" >> "$GITHUB_ENV"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "RSYNC_DRY=--dry-run --itemize-changes" >> "$GITHUB_ENV"
+            echo "IS_DRY=1" >> "$GITHUB_ENV"
+          else
+            echo "RSYNC_DRY=" >> "$GITHUB_ENV"
+            echo "IS_DRY=0" >> "$GITHUB_ENV"
+          fi
+
+      # --- 3) Déploiement BACKEND -> <DEPLOY_PATH>/backend --------------
+      # --delete : supprime sur le serveur ce qui n'existe plus dans le repo,
+      # SAUF les chemins de deploy/rsync-exclude.txt (.env, storage, caches...).
+      - name: Déploiement backend (rsync -> /backend)
+        run: |
+          rsync -az --delete $RSYNC_DRY \
+            --exclude-from=deploy/rsync-exclude.txt \
+            -e "ssh $SSH_OPTS" \
+            ./ "$SSH_TARGET:${{ secrets.DEPLOY_PATH }}/backend/"
+
+      # --- 4) Déploiement FRONT -> <DEPLOY_PATH>/public_html/synchro ---
+      # Cible UNIQUEMENT le sous-dossier /synchro (le reste de public_html est
+      # le PrestaShop : à ne jamais toucher). On préserve le .htaccess du SPA.
+      - name: Déploiement front (rsync React/dist -> /public_html/synchro)
+        run: |
+          rsync -az --delete $RSYNC_DRY \
+            --exclude='.htaccess' \
+            -e "ssh $SSH_OPTS" \
+            React/dist/ "$SSH_TARGET:${{ secrets.DEPLOY_PATH }}/public_html/synchro/"
+
+      # --- 5) Release distante (migrations + caches + queue) -----------
+      - name: Release distante (migrate + caches)
+        if: env.IS_DRY == '0'
+        run: |
+          ssh $SSH_OPTS "$SSH_TARGET" "cd '${{ secrets.DEPLOY_PATH }}/backend' && sed -i 's/\r\$//' deploy/remote-release.sh && bash deploy/remote-release.sh"
+
+      # --- 6) Smoke tests ----------------------------------------------
+      - name: Smoke test API + front
+        if: env.IS_DRY == '0'
+        run: |
+          echo "== API $BACKEND_URL/api/health =="
+          code=$(curl -s -o /dev/null -w "%{http_code}" "$BACKEND_URL/api/health" -H "Origin: https://loxystore.fr")
+          echo "HTTP $code"; [ "$code" = "200" ] || { echo "API KO"; exit 1; }
+          echo "== Front $FRONT_URL =="
+          fcode=$(curl -s -o /dev/null -w "%{http_code}" "$FRONT_URL")
+          echo "HTTP $fcode"; [ "$fcode" = "200" ] || { echo "Front KO"; exit 1; }
+          echo "Déploiement vérifié ✅"
+
+      - name: Résumé simulation
+        if: env.IS_DRY == '1'
+        run: echo "🔎 Simulation terminée. Vérifie surtout les lignes '*deleting*' ci-dessus avant un vrai déploiement."

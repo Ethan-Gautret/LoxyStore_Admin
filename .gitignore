@@ -36,3 +36,6 @@ React/vite-dev.log
 
 # Claude Code (personnel, non partagé)
 /.claude/
+
+# Rapport d'incident de sécurité (confidentiel, ne pas partager)
+/RAPPORT-SECURITE-*.md

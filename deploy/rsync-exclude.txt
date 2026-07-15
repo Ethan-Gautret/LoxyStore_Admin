@@ -1,0 +1,43 @@
+# Fichiers/dossiers EXCLUS du rsync backend (transfert ET suppression --delete).
+# Chemins ancrés à la racine (commençant par /) = relatifs à la racine du repo.
+#
+# IMPORTANT : /.env, /storage et /bootstrap/cache sont exclus -> jamais écrasés
+# ni supprimés sur le serveur (config + données + caches de prod préservés).
+
+# Données / config propres au serveur (à NE PAS toucher)
+/.env
+/.env.*
+/storage/
+/bootstrap/cache/
+/public/storage
+/public/hot
+
+# Sources non nécessaires en prod
+/.git/
+/.github/
+/.vscode/
+/.idea/
+/.claude/
+/.npmrc
+/node_modules/
+/React/
+/tests/
+/scripts/
+
+# Fichiers de données / dumps de dev à la racine
+/remote_page1.json
+/remote_refresh_page1.json
+/remote_refresh_page1_includeStock.json
+/temp_catalogue_payload.json
+
+# Outils de dev / artefacts divers
+/*.md
+/phpunit.xml
+/.phpunit.cache/
+/.phpunit.result.cache
+/.editorconfig
+/.gitattributes
+/.gitignore
+/package.json
+/package-lock.json
+/vite.config.js
