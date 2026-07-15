@@ -61,6 +61,9 @@ export default function Products() {
       baseParams.append('page', String(page))
       baseParams.append('pageSize', String(pageSize))
       baseParams.append('filter', mode)
+      // refresh=1 : la liste doit toujours refléter la base (prix/stock/imports
+      // récents) et non la réponse figée 5 min par le cache API applicatif.
+      baseParams.append('refresh', '1')
       if (searchTerm) baseParams.append('search', searchTerm)
 
       const firstPage = await requestJson(`/api/tdsynnex-products?${baseParams.toString()}`)
