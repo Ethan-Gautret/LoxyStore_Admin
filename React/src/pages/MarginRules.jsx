@@ -31,12 +31,17 @@ export default function MarginRules() {
   }, [])
 
   async function handleSave() {
+    // Un champ vide ne doit pas écraser silencieusement la marge à 0.
+    if (globalMargin === '' || isNaN(Number(globalMargin)) || Number(globalMargin) < 0) {
+      setMessage('Entrez une marge globale valide (ex. 10).')
+      return
+    }
     setSaving(true)
     setMessage('')
     try {
       const data = await requestJson('/api/margin-rules/global', {
         method: 'PUT',
-        body: JSON.stringify({ margin_value: globalMargin === '' ? 0 : Number(globalMargin) }),
+        body: JSON.stringify({ margin_value: Number(globalMargin) }),
       })
       setGlobalMargin(String(data?.global?.margin_value ?? globalMargin))
       setMessage('Marge globale enregistrée.')
