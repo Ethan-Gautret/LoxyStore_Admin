@@ -70,8 +70,10 @@ class SyncLogController extends Controller
             'disabled'      => (int) $log->products_disabled,
             'skipped'       => (int) $log->products_skipped,
             'errors'        => (int) $log->errors_count,
-            'started_at'    => optional($log->started_at)->toIso8601String(),
-            'date'          => optional($log->started_at)->format('d/m/Y H:i'),
+            // Stored in UTC; displayed in local time (Europe/Paris). Carbon handles
+            // the CET/CEST daylight-saving offset automatically (+1h winter, +2h summer).
+            'started_at'    => $log->started_at?->copy()->setTimezone('Europe/Paris')->toIso8601String(),
+            'date'          => $log->started_at?->copy()->setTimezone('Europe/Paris')->format('d/m/Y H:i'),
             'duration'      => $this->formatDuration((int) $log->duration_seconds),
             'report'        => $log->report,
         ];

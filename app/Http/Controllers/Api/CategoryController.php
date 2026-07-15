@@ -173,6 +173,30 @@ class CategoryController extends Controller
                     $message = 'Catégorie mappée, mais impossible d\'enclencher l\'import: ' . $exception->getMessage();
                 }
         } else {
+            // Collect the SKUs BEFORE wiping the local rows so we can also remove
+            // the corresponding products from PrestaShop: a category that becomes
+            // "non mappée" must no longer expose its products in the shop.
+            $skusToRemove = [];
+            try {
+                $skusToRemove = TDSynexProduct::query()
+                    ->where('category_tds', $validated['tds_category'])
+                    ->pluck('sku')
+                    ->all();
+            } catch (\Throwable) {}
+
+            $psDeleted = 0;
+            $psDeleteErrors = 0;
+            if ($skusToRemove !== []) {
+                try {
+                    $psResult = app(CategorySyncController::class)
+                        ->deletePrestashopProductsBySku($skusToRemove);
+                    $psDeleted = (int) ($psResult['deleted'] ?? 0);
+                    $psDeleteErrors = count($psResult['errors'] ?? []);
+                } catch (\Throwable $e) {
+                    Log::error('saveMapping: failed to delete PrestaShop products', ['error' => $e->getMessage(), 'payload' => $validated]);
+                }
+            }
+
             try {
                 CategoryMapping::where('tds_category', $validated['tds_category'])->delete();
             } catch (\Throwable $e) {
@@ -191,11 +215,15 @@ class CategoryController extends Controller
             $syncResult = [
                 'ok' => true,
                 'deleted' => $deletedProducts,
+                'prestashop_deleted' => $psDeleted,
+                'prestashop_errors' => $psDeleteErrors,
             ];
 
             $message = sprintf(
-                'Catégorie non mappée. %d produit(s) local(aux) ont été supprimé(s).',
-                (int) $deletedProducts
+                'Catégorie non mappée. %d produit(s) local(aux) supprimé(s), %d produit(s) supprimé(s) de PrestaShop%s.',
+                (int) $deletedProducts,
+                $psDeleted,
+                $psDeleteErrors > 0 ? sprintf(' (%d en erreur)', $psDeleteErrors) : ''
             );
         }
 

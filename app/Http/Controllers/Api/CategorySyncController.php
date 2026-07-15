@@ -236,6 +236,106 @@ class CategorySyncController extends Controller
         ]);
     }
 
+    /**
+     * Delete from PrestaShop every product matching the given SKUs (references).
+     *
+     * Used when a TD SYNNEX category is unmapped ("non mappée"): the products that
+     * were previously pushed to the shop must disappear from PrestaShop too. SKUs
+     * are resolved to PS product IDs globally by reference, then deleted in small
+     * concurrent batches. A 404 is treated as "already gone" (success). Never
+     * throws: PrestaShop errors are collected and returned.
+     *
+     * @param array<int, string> $skus
+     * @return array{ok:bool, deleted:int, errors:array<int,array<string,mixed>>, message?:string}
+     */
+    public function deletePrestashopProductsBySku(array $skus): array
+    {
+        // Deleting thousands of products is one HTTP round-trip each, so lift limits.
+        @set_time_limit(0);
+
+        $skus = array_values(array_unique(array_filter(
+            array_map('strval', $skus),
+            fn ($s) => trim($s) !== ''
+        )));
+
+        if ($skus === []) {
+            return ['ok' => true, 'deleted' => 0, 'errors' => []];
+        }
+
+        $payload = $this->psSettings();
+
+        if (! is_array($payload) || empty($payload['backoffice_url']) || empty($payload['webservice_key'])) {
+            return [
+                'ok'      => false,
+                'deleted' => 0,
+                'errors'  => [],
+                'message' => 'Configuration PrestaShop introuvable ou incomplète.',
+            ];
+        }
+
+        $shopBase = $this->shopBase($payload['backoffice_url']);
+
+        if (! $shopBase) {
+            return ['ok' => false, 'deleted' => 0, 'errors' => [], 'message' => 'URL PrestaShop invalide.'];
+        }
+
+        $wsKey = $payload['webservice_key'];
+
+        // Resolve SKU => PrestaShop product id (matched globally by reference).
+        $existingRefs = $this->fetchExistingRefs($shopBase, $wsKey, $skus);
+
+        if ($existingRefs === []) {
+            return ['ok' => true, 'deleted' => 0, 'errors' => []];
+        }
+
+        $deleted   = 0;
+        $errors    = [];
+        $batchSize = 5; // Concurrency cap for writes to the live shop.
+
+        foreach (array_chunk($existingRefs, $batchSize, true) as $batch) {
+            $responses = Http::pool(function (Pool $pool) use ($batch, $shopBase, $wsKey) {
+                foreach ($batch as $sku => $productId) {
+                    $pool->as((string) $sku)
+                        ->withBasicAuth($wsKey, '')
+                        ->accept('application/xml')
+                        ->timeout(30)
+                        ->withoutVerifying()
+                        ->delete($shopBase . '/api/products/' . $productId);
+                }
+            });
+
+            foreach ($batch as $sku => $productId) {
+                $response = $responses[(string) $sku] ?? null;
+
+                // PrestaShop returns 200 on a successful delete; a 404 means the
+                // product is already absent, which is exactly the end state we want.
+                if ($response instanceof Response && ($response->successful() || $response->status() === 404)) {
+                    $deleted++;
+                    continue;
+                }
+
+                $errors[] = [
+                    'sku'   => $sku,
+                    'id'    => $productId,
+                    'error' => $response instanceof Response
+                        ? $response->status() . ' ' . $this->extractPsError($response->body())
+                        : 'Pas de réponse de PrestaShop',
+                ];
+            }
+        }
+
+        try {
+            Log::info('CategorySync delete completed', [
+                'requested' => count($skus),
+                'resolved'  => count($existingRefs),
+                'deleted'   => $deleted,
+                'errors'    => count($errors),
+            ]);
+        } catch (\Throwable) {}
+
+        return ['ok' => empty($errors), 'deleted' => $deleted, 'errors' => $errors];
+    }
+
     // ── PrestaShop helpers ─────────────────────────────────────────────────────
 
     /**
