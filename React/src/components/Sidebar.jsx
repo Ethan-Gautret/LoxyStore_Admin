@@ -8,6 +8,7 @@ const iconMap = {
   filter: '⋮',
   clock: '◯',
   settings: '⚙',
+  users: '☺',
 }
 
 const navigationGroups = [
@@ -39,11 +40,19 @@ const navigationGroups = [
   },
   {
     title: 'Paramètres',
-    items: [{ label: 'Configuration API', icon: 'settings', route: '/settings' }],
+    items: [
+      { label: 'Configuration API', icon: 'settings', route: '/settings' },
+      { label: 'Utilisateurs', icon: 'users', route: '/users' },
+    ],
   },
 ]
 
-export default function Sidebar({ route, navigate }) {
+function initials(name) {
+  if (!name) return 'AD'
+  return name.trim().split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() ?? '').join('') || 'AD'
+}
+
+export default function Sidebar({ route, navigate, user, onLogout }) {
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -80,11 +89,20 @@ export default function Sidebar({ route, navigate }) {
       </nav>
 
       <div className="sidebar-profile">
-        <div className="avatar">AD</div>
-        <div>
-          <div className="profile-name">Admin</div>
-          <div className="profile-email">admin@loxystore.com</div>
+        <div className="avatar">{initials(user?.name)}</div>
+        <div className="profile-info">
+          <div className="profile-name">{user?.name ?? 'Utilisateur'}</div>
+          <div className="profile-email">{user?.email ?? ''}</div>
         </div>
+        <button
+          className="logout-button"
+          type="button"
+          onClick={onLogout}
+          aria-label="Se déconnecter"
+          title="Se déconnecter"
+        >
+          ⏻
+        </button>
       </div>
     </aside>
   )
