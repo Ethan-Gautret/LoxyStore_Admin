@@ -151,6 +151,9 @@ export default function Categories() {
   const [saveMessage, setSaveMessage] = useState('')
   const [syncing, setSyncing] = useState(false)
   const [syncResult, setSyncResult] = useState(null)
+  // Push en tâche de fond : progression + polling
+  const [pushProgress, setPushProgress] = useState(null)
+  const [polling, setPolling] = useState(false)
   // Import progress of the selected mapped category (polled from the backend)
   const [importStatus, setImportStatus] = useState(null)
 
@@ -302,15 +305,58 @@ export default function Categories() {
     if (!selectedId) return
     setSyncing(true)
     setSyncResult(null)
+    setPushProgress(null)
     try {
       const data = await requestJson(`/api/categories/${selectedId}/push`, { method: 'POST' })
-      setSyncResult({ ok: true, ...data })
+      if (data.queued) {
+        // Tâche de fond : on amorce la barre, le polling (effet ci-dessous) prend le relais.
+        setPushProgress({ running: true, processed: 0, total: data.total, created: 0, updated: 0, errors: 0 })
+        setPolling(true)
+      } else {
+        // Cas immédiat (aucun produit à pousser).
+        setSyncResult({ ok: true, ...data })
+        setSyncing(false)
+      }
     } catch (err) {
       setSyncResult({ ok: false, message: err.message })
-    } finally {
       setSyncing(false)
     }
   }
+
+  // Polling de la progression du push (démarré seulement après un push accepté en
+  // tâche de fond → pas de course avec l'écriture du statut côté serveur).
+  useEffect(() => {
+    if (!polling || !selectedId) return
+    let active = true
+    let timer = null
+    const poll = async () => {
+      try {
+        const data = await requestJson(`/api/categories/${selectedId}/push-status?refresh=1`)
+        if (!active) return
+        setPushProgress(data)
+        if (data.running) {
+          timer = setTimeout(poll, 1500)
+        } else {
+          setPolling(false)
+          setSyncing(false)
+          setSyncResult({
+            ok: !data.failed,
+            total: (data.created || 0) + (data.updated || 0),
+            created: data.created || 0,
+            updated: data.updated || 0,
+            errors: data.errorsSample || [],
+            errorsCount: data.errors || 0,
+            message: data.failed ? 'Le push a échoué (voir l\'historique des syncs).' : undefined,
+          })
+        }
+      } catch {
+        // erreur transitoire : on retente
+        if (active) timer = setTimeout(poll, 2500)
+      }
+    }
+    poll()
+    return () => { active = false; if (timer) clearTimeout(timer) }
+  }, [polling, selectedId])
 
   const selectedCategory = tdsCategories.find(c => c.id === selectedId)
   const selectedStatus = statuses[selectedId] || 'unmapped'
@@ -541,11 +587,28 @@ export default function Categories() {
               disabled={selectedStatus !== 'mapped' || syncing || importStatus?.running}
             >
               {syncing
-                ? 'Envoi en cours...'
+                ? (pushProgress && pushProgress.total > 0
+                    ? `Envoi en cours… ${Math.round((pushProgress.processed / pushProgress.total) * 100)}%`
+                    : 'Envoi en cours…')
                 : importStatus?.running
                   ? 'Import en cours…'
                   : 'Pousser vers PrestaShop'}
             </button>
+
+            {syncing && pushProgress && pushProgress.total > 0 && (
+              <div className="push-progress" aria-label="Progression du push">
+                <div className="push-progress-track">
+                  <div
+                    className="push-progress-fill"
+                    style={{ width: `${Math.round((pushProgress.processed / pushProgress.total) * 100)}%` }}
+                  />
+                </div>
+                <span className="push-progress-label">
+                  {pushProgress.processed} / {pushProgress.total} produits — {pushProgress.created} créés, {pushProgress.updated} mis à jour
+                  {pushProgress.errors > 0 ? `, ${pushProgress.errors} erreur${pushProgress.errors > 1 ? 's' : ''}` : ''}
+                </span>
+              </div>
+            )}
 
             {syncResult && (
               <div className={`sync-result ${syncResult.ok && !syncResult.errors?.length ? 'success' : syncResult.ok ? 'warning' : 'error'}`}>
@@ -558,13 +621,13 @@ export default function Categories() {
                         ? 'Aucun produit local à synchroniser pour cette catégorie.'
                         : `${syncResult.total} produit${syncResult.total > 1 ? 's' : ''} traité${syncResult.total > 1 ? 's' : ''} — ${syncResult.created} créé${syncResult.created > 1 ? 's' : ''}, ${syncResult.updated} mis à jour`}
                     </p>
-                    {syncResult.errors?.length > 0 && (
+                    {(syncResult.errorsCount ?? syncResult.errors?.length ?? 0) > 0 && (
                       <ul className="sync-errors">
-                        {syncResult.errors.slice(0, 5).map((e, i) => (
+                        {(syncResult.errors || []).slice(0, 5).map((e, i) => (
                           <li key={i}><strong>{e.sku}</strong> : {e.error}</li>
                         ))}
-                        {syncResult.errors.length > 5 && (
-                          <li>… et {syncResult.errors.length - 5} autre(s) erreur(s)</li>
+                        {(syncResult.errorsCount ?? syncResult.errors?.length ?? 0) > 5 && (
+                          <li>… et {(syncResult.errorsCount ?? syncResult.errors.length) - 5} autre(s) erreur(s)</li>
                         )}
                       </ul>
                     )}

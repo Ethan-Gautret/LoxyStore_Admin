@@ -1019,6 +1019,30 @@ button.pill:hover {
   opacity: 0.88;
 }
 
+.push-progress {
+  margin-top: 10px;
+}
+.push-progress-track {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: #e6ecf6;
+  overflow: hidden;
+}
+.push-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #1e7fff 0%, #1a6fe8 100%);
+  transition: width 300ms ease;
+}
+.push-progress-label {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.86rem;
+  color: #5a6882;
+  font-weight: 600;
+}
+
 .sync-result {
   margin-top: 14px;
   padding: 12px 14px;

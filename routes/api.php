@@ -75,6 +75,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/mapping', [CategoryController::class, 'saveMapping']);
         Route::get('/{code}/import-status', [CategoryController::class, 'tdsImportStatus']);
         Route::post('/{code}/push', [CategorySyncController::class, 'push']);
+        Route::get('/{code}/push-status', [CategorySyncController::class, 'pushStatus']);
     });
 
     // Règles des marges (MVP : règle globale)

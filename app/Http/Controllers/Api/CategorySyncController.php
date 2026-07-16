@@ -6,10 +6,12 @@ use App\Http\Controllers\Controller;
 use App\Models\CategoryMapping;
 use App\Models\SyncLog;
 use App\Models\TDSynexProduct;
+use App\Support\CacheStoreResolver;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Client\Response;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -28,160 +30,175 @@ class CategorySyncController extends Controller
      */
     public function push(Request $request, string $code): JsonResponse
     {
-        // Pushing thousands of products is one HTTP round-trip each, so lift limits.
         @set_time_limit(0);
 
-        // A push triggered from the UI is a "manual" sync; a scheduler/cron run
-        // passes ?trigger=scheduler so it is recorded as "automatique" in the history.
-        $startedAt = now();
         $triggeredBy = $request->string('trigger')->toString() === SyncLog::TRIGGER_SCHEDULER
-            ? SyncLog::TRIGGER_SCHEDULER
-            : SyncLog::TRIGGER_MANUAL;
-
-        // The cron commands tag their runs (prices_stock / full_catalog) so the
-        // history can tell apart the two scheduled jobs; UI pushes default to full_catalog.
+            ? SyncLog::TRIGGER_SCHEDULER : SyncLog::TRIGGER_MANUAL;
         $syncType = in_array($request->string('sync_type')->toString(), ['prices_stock', 'full_catalog'], true)
-            ? $request->string('sync_type')->toString()
-            : 'full_catalog';
+            ? $request->string('sync_type')->toString() : 'full_catalog';
+
+        // Validation synchrone → retour immédiat si mauvais réglage (l'UI a un feedback direct).
+        $mapping = CategoryMapping::query()
+            ->where('tds_category', $code)->where('active', true)
+            ->where('ignored', false)->whereNotNull('ps_category_id')->first();
+        if (! $mapping) {
+            return response()->json(['success' => false, 'message' => 'Cette catégorie n\'est pas mappée à une catégorie PrestaShop.'], 422);
+        }
+        $payload = $this->psSettings();
+        if (! is_array($payload) || empty($payload['backoffice_url']) || empty($payload['webservice_key'])) {
+            return response()->json(['success' => false, 'message' => 'Configuration PrestaShop introuvable ou incomplète.'], 422);
+        }
+        if (! $this->shopBase($payload['backoffice_url'])) {
+            return response()->json(['success' => false, 'message' => 'URL PrestaShop invalide.'], 422);
+        }
+
+        $total = TDSynexProduct::query()->where('category_tds', $code)->where('cost_price', '>', 0)->count();
+        if ($total === 0) {
+            return response()->json([
+                'success' => true, 'ok' => true, 'queued' => false, 'total' => 0,
+                'created' => 0, 'updated' => 0, 'errors' => [],
+                'message' => 'Aucun produit local avec un prix pour cette catégorie. Synchronisez d\'abord les produits depuis la page Produits.',
+            ]);
+        }
+
+        // Lancement en TÂCHE DE FOND (après la réponse HTTP : aucun worker de queue requis,
+        // même mécanisme que l'import). La requête répond tout de suite ; l'UI sonde push-status.
+        $this->writePushStatus($code, 'running', $total, 0, 0, 0, 0, []);
+        \App\Jobs\PushCategoryToPrestashop::dispatchAfterResponse($code, $triggeredBy, $syncType);
+
+        return response()->json([
+            'success' => true, 'ok' => true, 'queued' => true, 'total' => $total,
+            'message' => "Envoi de {$total} produit(s) vers PrestaShop démarré en arrière-plan.",
+        ]);
+    }
+
+    /**
+     * Exécute réellement le push (mémoire-safe : streaming par lots via chunkById,
+     * SANS charger raw_payload). Appelé en tâche de fond par PushCategoryToPrestashop,
+     * ou en synchrone par le scheduler (RunScheduledSync). Met à jour push-status au fil
+     * de l'eau pour la barre de progression. Retourne un tableau (created/updated/errors).
+     */
+    public function performPush(string $code, string $triggeredBy = 'manual', string $syncType = 'full_catalog'): array
+    {
+        @set_time_limit(0);
+        $startedAt = now();
+        $triggeredBy = $triggeredBy === SyncLog::TRIGGER_SCHEDULER ? SyncLog::TRIGGER_SCHEDULER : SyncLog::TRIGGER_MANUAL;
+        $syncType = in_array($syncType, ['prices_stock', 'full_catalog'], true) ? $syncType : 'full_catalog';
 
         $mapping = CategoryMapping::query()
-            ->where('tds_category', $code)
-            ->where('active', true)
-            ->where('ignored', false)
-            ->whereNotNull('ps_category_id')
-            ->first();
+            ->where('tds_category', $code)->where('active', true)
+            ->where('ignored', false)->whereNotNull('ps_category_id')->first();
 
         if (! $mapping) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Cette catégorie n\'est pas mappée à une catégorie PrestaShop.',
-            ], 422);
+            $this->writePushStatus($code, 'failed', 0, 0, 0, 0, 0, []);
+            return ['success' => false, 'ok' => false, 'total' => 0, 'created' => 0, 'updated' => 0, 'errors' => [], 'message' => 'Catégorie non mappée.'];
         }
 
         $psCategoryId = (int) $mapping->ps_category_id;
 
         $payload = $this->psSettings();
-
         if (! is_array($payload) || empty($payload['backoffice_url']) || empty($payload['webservice_key'])) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Configuration PrestaShop introuvable ou incomplète.',
-            ], 422);
+            $this->writePushStatus($code, 'failed', 0, 0, 0, 0, 0, []);
+            return ['success' => false, 'ok' => false, 'total' => 0, 'created' => 0, 'updated' => 0, 'errors' => [], 'message' => 'Configuration PrestaShop introuvable.'];
         }
 
         $shopBase = $this->shopBase($payload['backoffice_url']);
-
         if (! $shopBase) {
-            return response()->json([
-                'success' => false,
-                'message' => 'URL PrestaShop invalide.',
-            ], 422);
+            $this->writePushStatus($code, 'failed', 0, 0, 0, 0, 0, []);
+            return ['success' => false, 'ok' => false, 'total' => 0, 'created' => 0, 'updated' => 0, 'errors' => [], 'message' => 'URL PrestaShop invalide.'];
         }
-
         $wsKey = $payload['webservice_key'];
-
-        // Skip products without a price (TD SYNNEX services/warranties priced at 0)
-        // so we do not create 0 EUR items in the shop.
-        $query = TDSynexProduct::query()
-            ->where('category_tds', $code)
-            ->where('cost_price', '>', 0);
-
-        $limit = (int) $request->integer('limit', 0);
-        if ($limit > 0) {
-            $query->limit($limit);
-        }
-
-        $products = $query->get();
-
-        if ($products->isEmpty()) {
-            return response()->json([
-                'success' => true,
-                'ok'      => true,
-                'total'   => 0,
-                'created' => 0,
-                'updated' => 0,
-                'errors'  => [],
-                'message' => 'Aucun produit local avec un prix pour cette catégorie. Synchronisez d\'abord les produits depuis la page Produits.',
-            ]);
-        }
 
         // Marge = celle de la catégorie si définie, sinon la marge globale (Règles des marges).
         $margin = $mapping->margin_override !== null
             ? (float) $mapping->margin_override
             : \App\Models\MarginRule::globalMargin();
 
-        // Look up products already in PrestaShop (globally by SKU/reference) so we
-        // update (PUT) instead of duplicating (POST) on a re-push.
-        $existingRefs = $this->fetchExistingRefs($shopBase, $wsKey, $products->pluck('sku')->all());
-
+        $total = TDSynexProduct::query()->where('category_tds', $code)->where('cost_price', '>', 0)->count();
         $created = 0;
         $updated = 0;
         $errors  = [];
-        $batchSize = 5; // Concurrency cap for writes to the live shop.
+        $processed = 0;
+        $this->writePushStatus($code, 'running', $total, 0, 0, 0, 0, []);
 
-        foreach ($products->chunk($batchSize) as $batch) {
-            // 1. Create/update the products in this batch concurrently.
-            $responses = Http::pool(function (Pool $pool) use ($batch, $shopBase, $wsKey, $psCategoryId, $margin, $existingRefs) {
-                foreach ($batch as $product) {
-                    $cost = (float) ($product->cost_price ?? 0);
-                    $sellPrice = round($cost * (1 + ($margin / 100)), 6);
-                    $existingId = $existingRefs[$product->sku] ?? null;
+        // Streaming mémoire-safe : on ne charge qu'un lot de 200 lignes à la fois, et
+        // seulement les colonnes utiles (PAS raw_payload, qui faisait exploser la RAM).
+        TDSynexProduct::query()
+            ->where('category_tds', $code)->where('cost_price', '>', 0)
+            ->select(['id', 'sku', 'name', 'ean', 'cost_price', 'stock_qty', 'weight', 'description', 'is_active'])
+            ->orderBy('id')
+            ->chunkById(200, function ($chunk) use (&$created, &$updated, &$errors, &$processed, $shopBase, $wsKey, $psCategoryId, $margin, $total, $code): void {
+                // Produits déjà présents dans PrestaShop (par référence/SKU) → PUT au lieu de POST.
+                $existingRefs = $this->fetchExistingRefs($shopBase, $wsKey, $chunk->pluck('sku')->all());
 
-                    $xml = $this->buildProductXml(
-                        $product, $psCategoryId, $sellPrice, $product->is_active ? 1 : 0, $existingId
-                    );
+                foreach ($chunk->chunk(5) as $batch) {
+                    // 1. Create/update la sous-série de 5 en parallèle.
+                    $responses = Http::pool(function (Pool $pool) use ($batch, $shopBase, $wsKey, $psCategoryId, $margin, $existingRefs) {
+                        foreach ($batch as $product) {
+                            $cost = (float) ($product->cost_price ?? 0);
+                            $sellPrice = round($cost * (1 + ($margin / 100)), 6);
+                            $existingId = $existingRefs[$product->sku] ?? null;
 
-                    $req = $pool->as((string) $product->sku)
-                        ->withBasicAuth($wsKey, '')
-                        ->withBody($xml, 'application/xml')
-                        ->accept('application/xml')
-                        ->timeout(30)
-                        ->withoutVerifying();
+                            $xml = $this->buildProductXml(
+                                $product, $psCategoryId, $sellPrice, $product->is_active ? 1 : 0, $existingId
+                            );
 
-                    if ($existingId) {
-                        $req->put($shopBase . '/api/products/' . $existingId);
-                    } else {
-                        $req->post($shopBase . '/api/products');
+                            $req = $pool->as((string) $product->sku)
+                                ->withBasicAuth($wsKey, '')
+                                ->withBody($xml, 'application/xml')
+                                ->accept('application/xml')
+                                ->timeout(30)
+                                ->withoutVerifying();
+
+                            if ($existingId) {
+                                $req->put($shopBase . '/api/products/' . $existingId);
+                            } else {
+                                $req->post($shopBase . '/api/products');
+                            }
+                        }
+                    });
+
+                    // 2. Résultats + carte (productId => quantité) pour le stock.
+                    $stockTargets = [];
+
+                    foreach ($batch as $product) {
+                        $existingId = $existingRefs[$product->sku] ?? null;
+                        $response = $responses[(string) $product->sku] ?? null;
+
+                        if (! $response instanceof Response || ! $response->successful()) {
+                            $errors[] = [
+                                'sku'   => $product->sku,
+                                'error' => $response instanceof Response
+                                    ? $response->status() . ' ' . $this->extractPsError($response->body())
+                                    : 'Pas de réponse de PrestaShop',
+                            ];
+                            continue;
+                        }
+
+                        $productId = $this->parseProductId($response->body()) ?? $existingId;
+
+                        if ($existingId) {
+                            $updated++;
+                        } else {
+                            $created++;
+                            if ($productId) {
+                                $existingRefs[$product->sku] = $productId;
+                            }
+                        }
+
+                        if ($productId) {
+                            $stockTargets[(int) $productId] = (int) ($product->stock_qty ?? 0);
+                        }
                     }
+
+                    // 3. Stock de la sous-série, en parallèle.
+                    $this->updateStockBatch($shopBase, $wsKey, $stockTargets);
+
+                    // 4. Progression (barre côté UI).
+                    $processed += $batch->count();
+                    $this->writePushStatus($code, 'running', $total, $processed, $created, $updated, count($errors), array_slice($errors, -10));
                 }
             });
-
-            // 2. Collect results and the (productId => quantity) map for stock.
-            $stockTargets = [];
-
-            foreach ($batch as $product) {
-                $existingId = $existingRefs[$product->sku] ?? null;
-                $response = $responses[(string) $product->sku] ?? null;
-
-                if (! $response instanceof Response || ! $response->successful()) {
-                    $errors[] = [
-                        'sku'   => $product->sku,
-                        'error' => $response instanceof Response
-                            ? $response->status() . ' ' . $this->extractPsError($response->body())
-                            : 'Pas de réponse de PrestaShop',
-                    ];
-                    continue;
-                }
-
-                $productId = $this->parseProductId($response->body()) ?? $existingId;
-
-                if ($existingId) {
-                    $updated++;
-                } else {
-                    $created++;
-                    if ($productId) {
-                        $existingRefs[$product->sku] = $productId; // avoid re-creating if SKU recurs
-                    }
-                }
-
-                if ($productId) {
-                    $stockTargets[(int) $productId] = (int) ($product->stock_qty ?? 0);
-                }
-            }
-
-            // 3. Update stock for this batch concurrently.
-            $this->updateStockBatch($shopBase, $wsKey, $stockTargets);
-        }
 
         $errorsCount = count($errors);
         $successCount = $created + $updated;
@@ -229,14 +246,74 @@ class CategorySyncController extends Controller
             try { Log::error('SyncLog record failed', ['error' => $e->getMessage()]); } catch (\Throwable) {}
         }
 
-        return response()->json([
+        $this->writePushStatus($code, $status === 'failed' ? 'failed' : 'done', $total, $processed, $created, $updated, $errorsCount, array_slice($errors, -10));
+
+        return [
             'success' => true,
             'ok'      => true,
             'total'   => $successCount,
             'created' => $created,
             'updated' => $updated,
             'errors'  => $errors,
+            'status'  => $status,
+        ];
+    }
+
+    /**
+     * Statut de progression du push (barre côté UI). Lu en polling via
+     * GET /api/categories/{code}/push-status.
+     */
+    public function pushStatus(string $code): JsonResponse
+    {
+        $record = null;
+        try { $record = Cache::store(CacheStoreResolver::name())->get($this->pushStatusKey($code)); } catch (\Throwable) {}
+
+        if (! is_array($record)) {
+            return response()->json([
+                'success' => true, 'status' => 'idle', 'running' => false, 'done' => false, 'failed' => false,
+                'total' => 0, 'processed' => 0, 'created' => 0, 'updated' => 0, 'errors' => 0, 'errorsSample' => [],
+            ]);
+        }
+
+        $status = $record['status'] ?? 'idle';
+        $heartbeat = $record['heartbeat'] ?? null;
+        // Un push "running" sans battement depuis 2 min est considéré interrompu.
+        $stalled = $status === 'running' && $heartbeat !== null && (now()->timestamp - (int) $heartbeat) > 120;
+
+        return response()->json([
+            'success'      => true,
+            'status'       => $stalled ? 'stalled' : $status,
+            'running'      => $status === 'running' && ! $stalled,
+            'done'         => $status === 'done',
+            'failed'       => $status === 'failed',
+            'total'        => (int) ($record['total'] ?? 0),
+            'processed'    => (int) ($record['processed'] ?? 0),
+            'created'      => (int) ($record['created'] ?? 0),
+            'updated'      => (int) ($record['updated'] ?? 0),
+            'errors'       => (int) ($record['errors'] ?? 0),
+            'errorsSample' => $record['errorsSample'] ?? [],
         ]);
+    }
+
+    private function pushStatusKey(string $code): string
+    {
+        return 'integration:prestashop:pushstatus:' . sha1($code);
+    }
+
+    private function writePushStatus(string $code, string $status, int $total, int $processed, int $created, int $updated, int $errors, array $errorsSample): void
+    {
+        try {
+            Cache::store(CacheStoreResolver::name())->put($this->pushStatusKey($code), [
+                'status'       => $status,
+                'total'        => $total,
+                'processed'    => $processed,
+                'created'      => $created,
+                'updated'      => $updated,
+                'errors'       => $errors,
+                'errorsSample' => array_values($errorsSample),
+                'heartbeat'    => now()->timestamp,
+            ], now()->addDay());
+        } catch (\Throwable) {}
     }
 
     /**

@@ -78,15 +78,12 @@ class RunScheduledSync extends Command
                 }
             }
 
-            // Push to PrestaShop. push() records the sync_logs row (trigger=scheduler).
+            // Push to PrestaShop. performPush() est SYNCHRONE et mémoire-safe (streaming),
+            // et enregistre la ligne sync_logs (trigger=scheduler). On l'appelle en direct :
+            // en CLI il n'y a pas de réponse HTTP pour déclencher un dispatchAfterResponse.
             try {
                 $this->line("Push PrestaShop: {$code}…");
-                $request = Request::create("/api/categories/{$code}/push", 'POST', [
-                    'trigger'   => $trigger,
-                    'sync_type' => $type,
-                ]);
-                $response = $syncController->push($request, $code);
-                $data = $response->getData(true);
+                $data = $syncController->performPush($code, $trigger, $type);
 
                 $created = (int) ($data['created'] ?? 0);
                 $updated = (int) ($data['updated'] ?? 0);
