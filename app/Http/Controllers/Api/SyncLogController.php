@@ -27,11 +27,18 @@ class SyncLogController extends Controller
             $query->where('triggered_by', $trigger);
         }
 
+        // Les dates from/to sont saisies en heure locale (Europe/Paris) mais
+        // started_at est stocké en UTC : on convertit les bornes du jour local
+        // en UTC pour que le filtre corresponde aux dates affichées.
         if ($from = $request->string('from')->toString()) {
-            try { $query->where('started_at', '>=', $from . ' 00:00:00'); } catch (\Throwable) {}
+            try {
+                $query->where('started_at', '>=', \Carbon\Carbon::parse($from . ' 00:00:00', 'Europe/Paris')->utc());
+            } catch (\Throwable) {}
         }
         if ($to = $request->string('to')->toString()) {
-            try { $query->where('started_at', '<=', $to . ' 23:59:59'); } catch (\Throwable) {}
+            try {
+                $query->where('started_at', '<=', \Carbon\Carbon::parse($to . ' 23:59:59', 'Europe/Paris')->utc());
+            } catch (\Throwable) {}
         }
 
         $limit = min(500, max(1, (int) $request->integer('limit', 100)));

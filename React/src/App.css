@@ -1559,6 +1559,26 @@ button.pill:hover {
   font-weight: 700;
 }
 
+.sync-date-clear {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid #dbe3f0;
+  background: #f7f9fc;
+  color: #5a6882;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sync-date-clear:hover {
+  background: #eef2f8;
+  color: #d92d20;
+  border-color: #f5c2be;
+}
+
 .sync-history-list {
   display: grid;
   gap: 14px;

@@ -44,17 +44,22 @@ export default function SyncHistory() {
   const [error, setError] = useState(null)
   const [filter, setFilter] = useState('all')
   const [expandedId, setExpandedId] = useState(null)
+  // Filtre par date (format YYYY-MM-DD des <input type="date">, = format attendu par l'API).
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
 
+  // Recharge à chaque changement de plage de dates (filtrage côté serveur via ?from&to).
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    setError(null)
-    requestJson('/api/sync-logs?refresh=1&limit=200')
-      .then((payload) => { if (!cancelled) setRows(Array.isArray(payload.data) ? payload.data : []) })
+    const params = new URLSearchParams({ refresh: '1', limit: '200' })
+    if (from) params.set('from', from)
+    if (to) params.set('to', to)
+    requestJson(`/api/sync-logs?${params.toString()}`)
+      .then((payload) => { if (!cancelled) { setRows(Array.isArray(payload.data) ? payload.data : []); setError(null) } })
       .catch((err) => { if (!cancelled) setError(err.message || 'Chargement impossible.') })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [])
+  }, [from, to])
 
   const visibleRows = useMemo(
     () => (filter === 'all' ? rows : rows.filter((r) => r.trigger === filter)),
@@ -80,12 +85,35 @@ export default function SyncHistory() {
         <div className="sync-date-range" aria-label="Filtre par date">
           <label className="sync-date-field sync-date-from">
             <span className="date-icon">📅</span>
-            <input type="text" placeholder="jj/mm/aaaa" />
+            <input
+              type="date"
+              value={from}
+              max={to || undefined}
+              onChange={(e) => setFrom(e.target.value)}
+              aria-label="Date de début"
+            />
           </label>
           <span className="sync-date-separator">à</span>
           <label className="sync-date-field">
-            <input type="text" placeholder="jj/mm/aaaa" />
+            <input
+              type="date"
+              value={to}
+              min={from || undefined}
+              onChange={(e) => setTo(e.target.value)}
+              aria-label="Date de fin"
+            />
           </label>
+          {(from || to) && (
+            <button
+              type="button"
+              className="sync-date-clear"
+              onClick={() => { setFrom(''); setTo('') }}
+              aria-label="Effacer le filtre de date"
+              title="Effacer les dates"
+            >
+              ×
+            </button>
+          )}
         </div>
       </section>
 
