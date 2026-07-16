@@ -58,7 +58,7 @@ export default function Sidebar({ route, navigate, user, onLogout }) {
       <div className="brand">
         <div className="brand-mark">⬢</div>
         <div>
-          <div className="brand-title">LoxYStore Admin</div>
+          <div className="brand-title">LoxyStore Admin API</div>
         </div>
       </div>
 
