@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\TdsynexProductController;
 use App\Http\Controllers\Api\BrandController;
 use App\Http\Controllers\Api\CategoryController;
@@ -8,65 +9,84 @@ use App\Http\Controllers\Api\CronController;
 use App\Http\Controllers\Api\IntegrationSettingsController;
 use App\Http\Controllers\Api\MarginRuleController;
 use App\Http\Controllers\Api\SyncLogController;
+use App\Http\Controllers\Api\UserController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
-Route::get('/products', [TdsynexProductController::class, 'index']);
-Route::post('/tdsynnex-products/sync', [TdsynexProductController::class, 'sync']);
-Route::get('/tdsynnex-products', [TdsynexProductController::class, 'index']);
+// ─── Routes publiques ───────────────────────────────────────────────────────
 
-// Health check route
+// Health check
 Route::get('/health', function () {
     return response()->json(['status' => 'ok', 'timestamp' => now()]);
 });
 
-// Brand routes
-Route::prefix('brands')->group(function () {
-    // Specific actions FIRST (must precede /{brand} param routes)
-    Route::post('/sync', [BrandController::class, 'sync']);
-    Route::get('/tdsynnex-manufacturers', [BrandController::class, 'tdsynnexManufacturers']);
-    Route::get('/tdsynnex-test', [BrandController::class, 'tdsynnexTest']);
+// Connexion : émet un token Sanctum. Seule route "métier" accessible sans token.
+Route::post('/login', [AuthController::class, 'login']);
 
-    // Then parameterized routes
-    Route::get('/', [BrandController::class, 'index']);
-    Route::post('/', [BrandController::class, 'store']);
-    Route::get('/{brand}', [BrandController::class, 'show']);
-    Route::put('/{brand}', [BrandController::class, 'update']);
-    Route::post('/{brand}/toggle-blacklist', [BrandController::class, 'toggleBlacklist']);
+// ─── Routes protégées (token Sanctum requis) ────────────────────────────────
+// Sans token valide, tout l'API renvoie 401 → le front redirige vers /login.
+
+Route::middleware('auth:sanctum')->group(function () {
+    // Session courante
+    Route::get('/me', [AuthController::class, 'me']);
+    Route::post('/logout', [AuthController::class, 'logout']);
+
+    // Gestion des utilisateurs (CRUD, page Paramètres)
+    Route::get('/users', [UserController::class, 'index']);
+    Route::post('/users', [UserController::class, 'store']);
+    Route::put('/users/{user}', [UserController::class, 'update']);
+    Route::delete('/users/{user}', [UserController::class, 'destroy']);
+
+    // Produits TD SYNNEX
+    Route::get('/products', [TdsynexProductController::class, 'index']);
+    Route::post('/tdsynnex-products/sync', [TdsynexProductController::class, 'sync']);
+    Route::get('/tdsynnex-products', [TdsynexProductController::class, 'index']);
+
+    // Marques
+    Route::prefix('brands')->group(function () {
+        // Actions spécifiques AVANT les routes paramétrées /{brand}
+        Route::post('/sync', [BrandController::class, 'sync']);
+        Route::get('/tdsynnex-manufacturers', [BrandController::class, 'tdsynnexManufacturers']);
+        Route::get('/tdsynnex-test', [BrandController::class, 'tdsynnexTest']);
+
+        Route::get('/', [BrandController::class, 'index']);
+        Route::post('/', [BrandController::class, 'store']);
+        Route::get('/{brand}', [BrandController::class, 'show']);
+        Route::put('/{brand}', [BrandController::class, 'update']);
+        Route::post('/{brand}/toggle-blacklist', [BrandController::class, 'toggleBlacklist']);
+    });
+
+    // Catégories & mapping
+    Route::prefix('categories')->group(function () {
+        Route::get('/tds', [CategoryController::class, 'tdsCategories']);
+        Route::get('/tds/counts', [CategoryController::class, 'tdsCategoryCounts']);
+        Route::post('/mapping', [CategoryController::class, 'saveMapping']);
+        Route::get('/{code}/import-status', [CategoryController::class, 'tdsImportStatus']);
+        Route::post('/{code}/push', [CategorySyncController::class, 'push']);
+    });
+
+    // Règles des marges (MVP : règle globale)
+    Route::prefix('margin-rules')->group(function () {
+        Route::get('/global', [MarginRuleController::class, 'showGlobal']);
+        Route::put('/global', [MarginRuleController::class, 'updateGlobal']);
+    });
+
+    // Historique des synchronisations
+    Route::get('/sync-logs', [SyncLogController::class, 'index']);
+
+    // Configuration cron / sync planifiée
+    Route::prefix('cron')->group(function () {
+        Route::get('/', [CronController::class, 'index']);
+        Route::put('/', [CronController::class, 'update']);
+        Route::post('/{job}/run', [CronController::class, 'run']);
+    });
+
+    // Réglages d'intégration (TD SYNNEX / PrestaShop)
+    Route::get('/integration-settings', [IntegrationSettingsController::class, 'index']);
+    Route::put('/integration-settings/{section}', [IntegrationSettingsController::class, 'update']);
+    Route::post('/integration-settings/{section}/test', [IntegrationSettingsController::class, 'test']);
+    Route::get('/integration-settings/prestashop/categories', [IntegrationSettingsController::class, 'prestashopCategories']);
+
+    // Utilisateur Sanctum (compat)
+    Route::get('/user', fn (Request $request) => $request->user());
 });
-
-// Category mapping routes
-Route::prefix('categories')->group(function () {
-    Route::get('/tds', [CategoryController::class, 'tdsCategories']);
-    Route::get('/tds/counts', [CategoryController::class, 'tdsCategoryCounts']);
-    Route::post('/mapping', [CategoryController::class, 'saveMapping']);
-    // Import progress for a mapped category (drives the "Import en cours" indicator).
-    Route::get('/{code}/import-status', [CategoryController::class, 'tdsImportStatus']);
-    // Push all local products of a mapped category to PrestaShop.
-    Route::post('/{code}/push', [CategorySyncController::class, 'push']);
-});
-
-// Règles des marges (MVP : règle globale)
-Route::prefix('margin-rules')->group(function () {
-    Route::get('/global', [MarginRuleController::class, 'showGlobal']);
-    Route::put('/global', [MarginRuleController::class, 'updateGlobal']);
-});
-
-// Synchronisation history (manual + scheduled runs)
-Route::get('/sync-logs', [SyncLogController::class, 'index']);
-
-// Cron / scheduled-sync configuration
-Route::prefix('cron')->group(function () {
-    Route::get('/', [CronController::class, 'index']);
-    Route::put('/', [CronController::class, 'update']);
-    Route::post('/{job}/run', [CronController::class, 'run']);
-});
-
-Route::get('/integration-settings', [IntegrationSettingsController::class, 'index']);
-Route::put('/integration-settings/{section}', [IntegrationSettingsController::class, 'update']);
-Route::post('/integration-settings/{section}/test', [IntegrationSettingsController::class, 'test']);
-Route::get('/integration-settings/prestashop/categories', [IntegrationSettingsController::class, 'prestashopCategories']);
-
-Route::get('/user', function (Request $request) {
-    return $request->user();
-})->middleware('auth:sanctum');
