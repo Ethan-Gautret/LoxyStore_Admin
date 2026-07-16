@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\BrandController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\CategorySyncController;
 use App\Http\Controllers\Api\CronController;
+use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\IntegrationSettingsController;
 use App\Http\Controllers\Api\MarginRuleController;
 use App\Http\Controllers\Api\SyncLogController;
@@ -36,6 +37,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/users', [UserController::class, 'store']);
     Route::put('/users/{user}', [UserController::class, 'update']);
     Route::delete('/users/{user}', [UserController::class, 'destroy']);
+
+    // Dashboard
+    Route::get('/dashboard/catalogue-evolution', [DashboardController::class, 'catalogueEvolution']);
 
     // Produits TD SYNNEX
     Route::get('/products', [TdsynexProductController::class, 'index']);

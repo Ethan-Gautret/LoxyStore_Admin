@@ -1,4 +1,7 @@
 // dashboard page component
+import { useEffect, useState } from 'react'
+import { requestJson } from '../lib/auth'
+import CatalogueChart from '../components/CatalogueChart'
 
 // Demo cards removed - Dashboard will display real indicators from backend
 const quickCards = []
@@ -7,6 +10,20 @@ const quickCards = []
 const activityItems = []
 
 export default function Dashboard() {
+  const [evolution, setEvolution] = useState(undefined) // undefined=chargement, null=erreur
+
+  useEffect(() => {
+    let active = true
+    // refresh=1 : contourne le cache API 5 min pour un dashboard à jour.
+    requestJson('/api/dashboard/catalogue-evolution?days=30&refresh=1')
+      .then((data) => { if (active) setEvolution(data) })
+      .catch(() => { if (active) setEvolution(null) })
+    return () => { active = false }
+  }, [])
+
+  const hasData = evolution && Array.isArray(evolution.series) && evolution.series.length > 0
+  const totalNow = evolution?.total_now ?? null
+
   return (
     <main className="content-grid dashboard-page">
       <section className="summary-row" aria-label="Indicateurs principaux">
@@ -26,18 +43,31 @@ export default function Dashboard() {
         <div className="panel-header">
           <div>
             <h2>Évolution du catalogue</h2>
-            <p>Zone réservée aux données de synchronisation à venir</p>
+            <p>
+              {totalNow != null
+                ? `${totalNow} produit${totalNow > 1 ? 's' : ''} au total · 30 derniers jours`
+                : 'Nombre de produits importés dans le temps'}
+            </p>
           </div>
         </div>
 
-        <div className="chart-placeholder" aria-hidden="true">
-          <div className="chart-grid" />
-          <div className="chart-empty-state">
-            <div className="empty-icon">∿</div>
-            <strong>Aucune donnée disponible</strong>
-            <span>Le graphe sera alimenté par le back plus tard.</span>
+        {evolution === undefined ? (
+          <div className="chart-placeholder" aria-hidden="true">
+            <div className="chart-grid" />
+            <div className="chart-empty-state"><span>Chargement…</span></div>
           </div>
-        </div>
+        ) : !hasData || totalNow === 0 ? (
+          <div className="chart-placeholder" aria-hidden="true">
+            <div className="chart-grid" />
+            <div className="chart-empty-state">
+              <div className="empty-icon">∿</div>
+              <strong>Aucun produit importé</strong>
+              <span>Le graphe se remplira dès la première synchronisation.</span>
+            </div>
+          </div>
+        ) : (
+          <CatalogueChart series={evolution.series} />
+        )}
       </section>
 
       <section className="panel activity-panel">
