@@ -621,7 +621,16 @@ class CategoryController extends Controller
             return;
         }
 
-        DB::transaction(function () use ($remoteProducts, $categoryCode, &$allSkus, &$created, &$updated): void {
+        // Filtres d'import (globaux) + overrides éventuels de la catégorie.
+        $filter = \App\Models\ImportFilter::current();
+        $mapping = CategoryMapping::query()->where('tds_category', $categoryCode)->first();
+        $override = $mapping ? [
+            'min_stock' => $mapping->min_stock_override,
+            'min_price' => $mapping->min_price_override,
+            'max_price' => $mapping->max_price_override,
+        ] : null;
+
+        DB::transaction(function () use ($remoteProducts, $categoryCode, $filter, $override, &$allSkus, &$created, &$updated): void {
             foreach ($remoteProducts as $remoteProduct) {
                 $sku = trim((string) ($remoteProduct['sku'] ?? $remoteProduct['id'] ?? data_get($remoteProduct, 'tdsynnexPartNumber') ?? ''));
 
@@ -665,6 +674,22 @@ class CategoryController extends Controller
                 $isActive = array_key_exists('is_active', $remoteProduct)
                     ? (bool) $remoteProduct['is_active']
                     : ! in_array(strtolower((string) ($remoteProduct['productStatusCode'] ?? 'active')), ['inactive', 'discontinued', 'deleted'], true);
+
+                // Filtres d'import : exclure (ne pas importer) ou désactiver le produit.
+                // Un produit exclu n'est pas ajouté à $allSkus → purgé du catalogue local.
+                $decision = \App\Support\ImportFilterEvaluator::evaluate([
+                    'name'        => $name,
+                    'ean'         => $ean,
+                    'weight'      => is_numeric($weight) ? (float) $weight : null,
+                    'description' => is_string($description) ? $description : null,
+                    'cost_price'  => is_numeric($costPrice) ? (float) $costPrice : 0.0,
+                    'stock_qty'   => is_numeric($stockQty) ? (int) $stockQty : 0,
+                ], $filter, $override);
+
+                if (! $decision['keep']) {
+                    continue;
+                }
+                $isActive = $isActive && $decision['active'];
 
                 $hash = sha1(json_encode([
                     'sku' => $sku,

@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\CategorySyncController;
 use App\Http\Controllers\Api\CronController;
 use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\ImportFilterController;
 use App\Http\Controllers\Api\IntegrationSettingsController;
 use App\Http\Controllers\Api\MarginRuleController;
 use App\Http\Controllers\Api\SyncLogController;
@@ -40,6 +41,13 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Dashboard
     Route::get('/dashboard/catalogue-evolution', [DashboardController::class, 'catalogueEvolution']);
+
+    // Filtres d'import (réglages globaux + overrides par catégorie)
+    Route::get('/import-filters', [ImportFilterController::class, 'index']);
+    Route::put('/import-filters', [ImportFilterController::class, 'update']);
+    Route::get('/import-filters/category-overrides', [ImportFilterController::class, 'categoryOverrides']);
+    Route::put('/import-filters/category-overrides/{code}', [ImportFilterController::class, 'updateCategoryOverride']);
+    Route::delete('/import-filters/category-overrides/{code}', [ImportFilterController::class, 'deleteCategoryOverride']);
 
     // Produits TD SYNNEX
     Route::get('/products', [TdsynexProductController::class, 'index']);
