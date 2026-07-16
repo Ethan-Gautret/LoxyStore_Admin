@@ -12,14 +12,15 @@ async function requestJson(path, options = {}) {
   return payload
 }
 
-// Règles spécifiques : à venir (MVP = règle globale uniquement)
-const marginRules = []
-
 export default function MarginRules() {
   const [globalMargin, setGlobalMargin] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
+
+  // Règles spécifiques = catégories avec une marge personnalisée.
+  const [specificRules, setSpecificRules] = useState([])
+  const [loadingSpecific, setLoadingSpecific] = useState(true)
 
   useEffect(() => {
     let active = true
@@ -27,6 +28,12 @@ export default function MarginRules() {
       .then((data) => { if (active) setGlobalMargin(String(data?.global?.margin_value ?? '')) })
       .catch(() => { if (active) setMessage('Impossible de charger la marge globale.') })
       .finally(() => { if (active) setLoading(false) })
+
+    requestJson('/api/margin-rules/specific?refresh=1')
+      .then((data) => { if (active) setSpecificRules(Array.isArray(data?.rules) ? data.rules : []) })
+      .catch(() => { /* silencieux : la section affichera l'état vide */ })
+      .finally(() => { if (active) setLoadingSpecific(false) })
+
     return () => { active = false }
   }, [])
 
@@ -102,9 +109,12 @@ export default function MarginRules() {
 
       <section className="panel specific-rules">
         <div className="panel-header">
-          <h2>Règles spécifiques</h2>
+          <div>
+            <h2>Règles spécifiques</h2>
+            <p>Catégories ayant une marge personnalisée (prioritaire sur la marge globale). Modifiable depuis la page Catégories.</p>
+          </div>
           <div className="panel-actions">
-            <span className="pill muted">À venir</span>
+            <span className="pill muted">{specificRules.length} catégorie{specificRules.length > 1 ? 's' : ''}</span>
           </div>
         </div>
 
@@ -112,36 +122,35 @@ export default function MarginRules() {
           <table className="rules-table">
             <thead>
               <tr>
-                <th>Priorité</th>
                 <th>Portée</th>
-                <th>Cible</th>
-                <th>Type</th>
-                <th>Valeur</th>
-                <th>Actif</th>
-                <th>Actions</th>
+                <th>Catégorie</th>
+                <th>Marge (%)</th>
+                <th>Produits</th>
+                <th>Statut</th>
               </tr>
             </thead>
             <tbody>
-              {marginRules.length === 0 ? (
+              {loadingSpecific ? (
                 <tr>
-                  <td colSpan="7" style={{ padding: '16px 0', color: '#65708a' }}>
-                    Règles par SKU / marque / catégorie : à venir. Pour l'instant, utilisez la marge globale
-                    ci-dessus ou la marge par catégorie (page Catégories).
+                  <td colSpan="5" style={{ padding: '16px 0', color: '#65708a' }}>Chargement…</td>
+                </tr>
+              ) : specificRules.length === 0 ? (
+                <tr>
+                  <td colSpan="5" style={{ padding: '16px 0', color: '#65708a' }}>
+                    Aucune catégorie avec marge personnalisée. Définissez une marge par catégorie
+                    depuis la page Catégories ; elle apparaîtra ici.
                   </td>
                 </tr>
-              ) : marginRules.map((r) => (
-                <tr key={r.priority}>
-                  <td>{r.priority}</td>
-                  <td><span className="pill muted">{r.scope}</span></td>
-                  <td>{r.target}</td>
-                  <td>{r.type}</td>
-                  <td>{r.value}</td>
-                  <td><label className="toggle"><input type="checkbox" defaultChecked={r.active} /><span className="toggle-knob" /></label></td>
+              ) : specificRules.map((r) => (
+                <tr key={r.id}>
+                  <td><span className="pill muted">Catégorie</span></td>
+                  <td>{r.name}</td>
+                  <td><strong>{r.margin_value}%</strong></td>
+                  <td>{r.product_count}</td>
                   <td>
-                    <div className="row-actions">
-                      <button className="row-icon-button"><span className="edit-icon" /></button>
-                      <button className="row-icon-button"><span className="ban-icon" /></button>
-                    </div>
+                    <span className={`pill ${r.active ? 'success' : 'muted'}`}>
+                      {r.active ? 'Actif' : 'Inactif'}
+                    </span>
                   </td>
                 </tr>
               ))}

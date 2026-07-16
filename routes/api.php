@@ -73,6 +73,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::prefix('margin-rules')->group(function () {
         Route::get('/global', [MarginRuleController::class, 'showGlobal']);
         Route::put('/global', [MarginRuleController::class, 'updateGlobal']);
+        // Catégories avec une marge personnalisée (règles spécifiques)
+        Route::get('/specific', [MarginRuleController::class, 'specificRules']);
     });
 
     // Historique des synchronisations
