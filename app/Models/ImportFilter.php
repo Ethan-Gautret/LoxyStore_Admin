@@ -39,9 +39,11 @@ class ImportFilter extends Model
         'vat_rate'            => 'float',
     ];
 
-    /** Valeurs par défaut quand aucune ligne n'existe encore. */
+    /** Valeurs par défaut quand aucune ligne n'existe encore.
+     *  min_stock = 0 → AUCUN filtre par défaut : la nouvelle fonctionnalité ne
+     *  change rien tant que l'utilisateur ne configure pas de filtre. */
     public const DEFAULTS = [
-        'min_stock'           => 1,
+        'min_stock'           => 0,
         'min_price'           => null,
         'max_price'           => null,
         'exclude_keywords'    => [],
