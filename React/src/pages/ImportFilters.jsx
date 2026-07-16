@@ -2,9 +2,10 @@
 import { useEffect, useState } from 'react'
 import { requestJson } from '../lib/auth'
 
+// Note : « Poids » et « Image » ne sont pas proposés — TD SYNNEX ne fournit pas
+// ces champs, donc les exiger exclurait tous les produits à l'import.
 const ATTRIBUTES = [
   { key: 'ean', label: 'EAN requis', hint: 'Code-barres nécessaire' },
-  { key: 'weight', label: 'Poids requis', hint: 'Pour calcul frais de port' },
   { key: 'description', label: 'Description requise', hint: 'Texte de description présent' },
 ]
 

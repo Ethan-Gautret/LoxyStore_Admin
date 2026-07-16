@@ -34,17 +34,17 @@ class ImportFilterEvaluator
         $name  = mb_strtolower(trim((string) ($p['name'] ?? '')));
 
         // 1) Attributs obligatoires : un attribut requis manquant = exclusion.
+        // Seuls 'ean' et 'description' sont réellement fournis par TD SYNNEX.
+        // 'weight' et 'image' sont IGNORÉS même s'ils traînent dans un filtre
+        // enregistré : TD SYNNEX ne fournit pas ces champs, donc les exiger
+        // exclurait 100% des produits (incident d'import 2026-07-16).
         $required = $f->required_attributes ?? [];
         if (in_array('ean', $required, true) && trim((string) ($p['ean'] ?? '')) === '') {
-            return $exclude;
-        }
-        if (in_array('weight', $required, true) && ! ((float) ($p['weight'] ?? 0) > 0)) {
             return $exclude;
         }
         if (in_array('description', $required, true) && trim((string) ($p['description'] ?? '')) === '') {
             return $exclude;
         }
-        // 'image' non supporté (aucune donnée image extraite) → ignoré.
 
         // 2) Bornes de prix d'achat (uniquement si définies).
         if ($minPrice !== null && $cost < (float) $minPrice) {

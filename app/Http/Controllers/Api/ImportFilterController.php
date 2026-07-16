@@ -11,7 +11,9 @@ use Illuminate\Http\Request;
 
 class ImportFilterController extends Controller
 {
-    public const ATTRIBUTES = ['ean', 'weight', 'description', 'image'];
+    // 'weight' et 'image' exclus : TD SYNNEX ne fournit pas ces champs → les exiger
+    // exclurait 100% des produits (voir historique de l'incident d'import).
+    public const ATTRIBUTES = ['ean', 'description'];
     public const STOCK_BEHAVIOURS = ['disable', 'keep', 'delete'];
     public const PRICE_ROUNDINGS = ['none', 'psychological', 'round'];
 
