@@ -15,7 +15,7 @@ const emptyFilters = {
   max_price: '',
   exclude_keywords: [],
   required_attributes: [],
-  stock_behaviour: 'disable',
+  stock_behaviour: 'delete',
 }
 
 export default function ImportFilters() {
@@ -41,7 +41,7 @@ export default function ImportFilters() {
           max_price: g.max_price ?? '',
           exclude_keywords: Array.isArray(g.exclude_keywords) ? g.exclude_keywords : [],
           required_attributes: Array.isArray(g.required_attributes) ? g.required_attributes : [],
-          stock_behaviour: g.stock_behaviour ?? 'disable',
+          stock_behaviour: g.stock_behaviour ?? 'delete',
         })
         setCategories((c.categories || []).map((cat) => ({
           ...cat,
@@ -118,7 +118,7 @@ export default function ImportFilters() {
         }),
       })))
 
-      setMessage({ text: 'Filtres enregistrés. Ils s\'appliqueront au prochain import (sync catalogue complet).', type: 'success' })
+      setMessage({ text: 'Filtres enregistrés. Ils s\'appliquent à chaque envoi vers PrestaShop.', type: 'success' })
     } catch (err) {
       const v = err.payload?.errors ? Object.values(err.payload.errors).flat().join(' ') : ''
       setMessage({ text: v || err.message || 'Enregistrement impossible.', type: 'error' })
@@ -132,8 +132,8 @@ export default function ImportFilters() {
       <section className="panel info-box">
         <div className="info-left">i</div>
         <div>
-          <strong>Les filtres s'appliquent à l'import</strong>
-          <div className="info-sub">Un produit hors critères est exclu du catalogue (ou désactivé s'il est juste en rupture). Prise en compte au prochain import « catalogue complet ».</div>
+          <strong>Les filtres s'appliquent à l'envoi vers PrestaShop</strong>
+          <div className="info-sub">L'import récupère tout le catalogue ; à l'envoi, un produit qui ne respecte pas les critères (stock, prix, attributs, mots-clés) n'est pas envoyé à PrestaShop. Pris en compte à chaque push.</div>
         </div>
       </section>
 
@@ -141,7 +141,7 @@ export default function ImportFilters() {
         <div className="panel-header">
           <div>
             <h2>Filtres de stock</h2>
-            <p>Stock minimum et comportement des produits en rupture</p>
+            <p>Stock minimum requis pour envoyer un produit (0 = pas de filtre de stock)</p>
           </div>
         </div>
 
@@ -164,8 +164,8 @@ export default function ImportFilters() {
           </label>
           <label className="select-wrap">
             <select value={filters.stock_behaviour} onChange={(e) => setField('stock_behaviour', e.target.value)} disabled={loading}>
-              <option value="disable">Désactiver le produit</option>
-              <option value="keep">Garder en stock</option>
+              <option value="delete">Ne pas envoyer à PrestaShop</option>
+              <option value="disable">Envoyer mais désactivé</option>
             </select>
           </label>
         </div>

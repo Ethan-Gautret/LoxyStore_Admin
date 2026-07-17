@@ -114,11 +114,22 @@ class CategorySyncController extends Controller
             ? (float) $mapping->margin_override
             : \App\Models\MarginRule::globalMargin();
 
+        // Filtres d'import : décident ce qui est ENVOYÉ à PrestaShop. Un produit qui
+        // ne respecte pas les conditions (stock < min, prix hors bornes, attribut
+        // requis manquant, mot-clé exclu) n'est PAS envoyé. Overrides catégorie prioritaires.
+        $filter = \App\Models\ImportFilter::current();
+        $override = [
+            'min_stock' => $mapping->min_stock_override,
+            'min_price' => $mapping->min_price_override,
+            'max_price' => $mapping->max_price_override,
+        ];
+
         $total = TDSynexProduct::query()->where('category_tds', $code)->where('cost_price', '>', 0)->count();
         $created = 0;
         $updated = 0;
         $errors  = [];
         $processed = 0;
+        $skipped = 0;
         $this->writePushStatus($code, 'running', $total, 0, 0, 0, 0, []);
 
         // Streaming mémoire-safe : on ne charge qu'un lot de 200 lignes à la fois, et
@@ -127,21 +138,49 @@ class CategorySyncController extends Controller
             ->where('category_tds', $code)->where('cost_price', '>', 0)
             ->select(['id', 'sku', 'name', 'ean', 'cost_price', 'stock_qty', 'weight', 'description', 'is_active'])
             ->orderBy('id')
-            ->chunkById(200, function ($chunk) use (&$created, &$updated, &$errors, &$processed, $shopBase, $wsKey, $psCategoryId, $margin, $total, $code): void {
+            ->chunkById(200, function ($chunk) use (&$created, &$updated, &$errors, &$processed, &$skipped, $shopBase, $wsKey, $psCategoryId, $margin, $total, $code, $filter, $override): void {
                 // Produits déjà présents dans PrestaShop (par référence/SKU) → PUT au lieu de POST.
                 $existingRefs = $this->fetchExistingRefs($shopBase, $wsKey, $chunk->pluck('sku')->all());
 
                 foreach ($chunk->chunk(5) as $batch) {
-                    // 1. Create/update la sous-série de 5 en parallèle.
-                    $responses = Http::pool(function (Pool $pool) use ($batch, $shopBase, $wsKey, $psCategoryId, $margin, $existingRefs) {
-                        foreach ($batch as $product) {
+                    // 0. Filtrage : on ne garde que les produits à envoyer.
+                    //    keep=false → non envoyé (stock<min "ne pas envoyer", prix hors bornes,
+                    //    attribut requis manquant, mot-clé exclu). active=false → envoyé désactivé.
+                    $toSend = [];
+                    foreach ($batch as $product) {
+                        $decision = \App\Support\ImportFilterEvaluator::evaluate([
+                            'name'        => $product->name,
+                            'ean'         => $product->ean,
+                            'weight'      => $product->weight,
+                            'description' => $product->description,
+                            'cost_price'  => (float) ($product->cost_price ?? 0),
+                            'stock_qty'   => (int) ($product->stock_qty ?? 0),
+                        ], $filter, $override);
+
+                        if (! $decision['keep']) {
+                            $skipped++;
+                            continue;
+                        }
+                        $toSend[] = ['p' => $product, 'active' => (bool) $decision['active']];
+                    }
+
+                    $processed += $batch->count();
+
+                    if ($toSend === []) {
+                        $this->writePushStatus($code, 'running', $total, $processed, $created, $updated, count($errors), array_slice($errors, -10));
+                        continue;
+                    }
+
+                    // 1. Create/update les produits retenus, en parallèle.
+                    $responses = Http::pool(function (Pool $pool) use ($toSend, $shopBase, $wsKey, $psCategoryId, $margin, $existingRefs) {
+                        foreach ($toSend as $item) {
+                            $product = $item['p'];
                             $cost = (float) ($product->cost_price ?? 0);
                             $sellPrice = round($cost * (1 + ($margin / 100)), 6);
                             $existingId = $existingRefs[$product->sku] ?? null;
+                            $activeFlag = ($product->is_active && $item['active']) ? 1 : 0;
 
-                            $xml = $this->buildProductXml(
-                                $product, $psCategoryId, $sellPrice, $product->is_active ? 1 : 0, $existingId
-                            );
+                            $xml = $this->buildProductXml($product, $psCategoryId, $sellPrice, $activeFlag, $existingId);
 
                             $req = $pool->as((string) $product->sku)
                                 ->withBasicAuth($wsKey, '')
@@ -161,7 +200,8 @@ class CategorySyncController extends Controller
                     // 2. Résultats + carte (productId => quantité) pour le stock.
                     $stockTargets = [];
 
-                    foreach ($batch as $product) {
+                    foreach ($toSend as $item) {
+                        $product = $item['p'];
                         $existingId = $existingRefs[$product->sku] ?? null;
                         $response = $responses[(string) $product->sku] ?? null;
 
@@ -191,11 +231,10 @@ class CategorySyncController extends Controller
                         }
                     }
 
-                    // 3. Stock de la sous-série, en parallèle.
+                    // 3. Stock des produits envoyés, en parallèle.
                     $this->updateStockBatch($shopBase, $wsKey, $stockTargets);
 
                     // 4. Progression (barre côté UI).
-                    $processed += $batch->count();
                     $this->writePushStatus($code, 'running', $total, $processed, $created, $updated, count($errors), array_slice($errors, -10));
                 }
             });
@@ -229,10 +268,8 @@ class CategorySyncController extends Controller
                 'products_created'  => $created,
                 'products_updated'  => $updated,
                 'products_disabled' => 0,
-                'products_skipped'  => (int) TDSynexProduct::query()
-                    ->where('category_tds', $code)
-                    ->where('cost_price', '<=', 0)
-                    ->count(),
+                // Produits non envoyés car ils ne respectent pas les filtres d'import.
+                'products_skipped'  => $skipped,
                 'errors_count'      => $errorsCount,
                 'report'            => [
                     'operation'   => 'push_prestashop',

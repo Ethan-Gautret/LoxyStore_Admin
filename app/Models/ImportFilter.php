@@ -48,7 +48,9 @@ class ImportFilter extends Model
         'max_price'           => null,
         'exclude_keywords'    => [],
         'required_attributes' => [],
-        'stock_behaviour'     => 'disable',
+        // Produit sous le stock minimum : 'delete' = ne pas envoyer à PrestaShop
+        // (défaut), 'disable' = envoyer mais désactivé.
+        'stock_behaviour'     => 'delete',
         'apply_vat'           => true,
         'vat_rate'            => 20.0,
         'price_rounding'      => 'none',
